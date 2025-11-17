@@ -55,6 +55,8 @@ def get_all_books():
     conn = sqlite3.connect('library.db')
     df = pd.read_sql_query("SELECT * FROM books", conn)
     conn.close()
+    df['quantity'] = pd.to_numeric(df['quantity'], errors='coerce').fillna(0).astype(int)
+    df['available'] = pd.to_numeric(df['available'], errors='coerce').fillna(0).astype(int)
     return df
 
 def get_borrowed_books():
@@ -383,4 +385,5 @@ elif menu == "View All Books":
 
 # Footer
 st.sidebar.markdown("---")
+
 st.sidebar.info("📚 SAD Library System v2.0 - SQLite Edition")
