@@ -17,12 +17,13 @@ def init_db():
     conn = sqlite3.connect('library.db')
     c = conn.cursor()
     
-    # Create administrators table
-    c.execute('''CREATE TABLE IF NOT EXISTS administrators
+    # Create users table with roles
+    c.execute('''CREATE TABLE IF NOT EXISTS users
                  (username TEXT PRIMARY KEY,
                   password TEXT NOT NULL,
                   full_name TEXT NOT NULL,
                   email TEXT,
+                  role TEXT NOT NULL,
                   created_date DATE)''')
     
     # Create books table
@@ -47,13 +48,16 @@ def init_db():
                   due_date DATE,
                   status TEXT)''')
     
-    # Check if default admin exists
-    c.execute("SELECT COUNT(*) FROM administrators WHERE username = 'admin'")
+    # Check if default users exist
+    c.execute("SELECT COUNT(*) FROM users WHERE username = 'admin'")
     if c.fetchone()[0] == 0:
-        # Create default admin account
-        default_password = hash_password('admin123')
-        c.execute("INSERT INTO administrators VALUES (?, ?, ?, ?, ?)",
-                  ('admin', default_password, 'System Administrator', 'admin@library.com', datetime.now().date()))
+        # Create default accounts
+        default_users = [
+            ('admin', hash_password('admin123'), 'System Administrator', 'admin@library.com', 'Administrator', datetime.now().date()),
+            ('staff', hash_password('staff123'), 'Library Staff', 'staff@library.com', 'Library Staff', datetime.now().date()),
+            ('student', hash_password('student123'), 'Student User', 'student@library.com', 'Student', datetime.now().date())
+        ]
+        c.executemany("INSERT INTO users VALUES (?, ?, ?, ?, ?, ?)", default_users)
     
     # Check if tables are empty and add sample data
     c.execute("SELECT COUNT(*) FROM books")
@@ -76,33 +80,25 @@ def verify_login(username, password):
     conn = sqlite3.connect('library.db')
     c = conn.cursor()
     hashed_password = hash_password(password)
-    c.execute("SELECT * FROM administrators WHERE username = ? AND password = ?", 
+    c.execute("SELECT role, full_name FROM users WHERE username = ? AND password = ?", 
               (username, hashed_password))
     result = c.fetchone()
     conn.close()
-    return result is not None
+    return result
 
-def register_admin(username, password, full_name, email):
+def register_user(username, password, full_name, email, role):
     conn = sqlite3.connect('library.db')
     c = conn.cursor()
     try:
         hashed_password = hash_password(password)
-        c.execute("INSERT INTO administrators VALUES (?, ?, ?, ?, ?)",
-                  (username, hashed_password, full_name, email, datetime.now().date()))
+        c.execute("INSERT INTO users VALUES (?, ?, ?, ?, ?, ?)",
+                  (username, hashed_password, full_name, email, role, datetime.now().date()))
         conn.commit()
         conn.close()
         return True
     except sqlite3.IntegrityError:
         conn.close()
         return False
-
-def get_admin_info(username):
-    conn = sqlite3.connect('library.db')
-    c = conn.cursor()
-    c.execute("SELECT full_name FROM administrators WHERE username = ?", (username,))
-    result = c.fetchone()
-    conn.close()
-    return result[0] if result else None
 
 # Database functions
 def get_all_books():
@@ -210,6 +206,10 @@ if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
 if 'username' not in st.session_state:
     st.session_state.username = None
+if 'role' not in st.session_state:
+    st.session_state.role = None
+if 'full_name' not in st.session_state:
+    st.session_state.full_name = None
 
 # Login/Registration Page
 if not st.session_state.logged_in:
@@ -218,7 +218,7 @@ if not st.session_state.logged_in:
     tab1, tab2 = st.tabs(["🔐 Login", "📝 Register"])
     
     with tab1:
-        st.header("Administrator Login")
+        st.header("User Login")
         
         with st.form("login_form"):
             username = st.text_input("Username")
@@ -227,20 +227,29 @@ if not st.session_state.logged_in:
             
             if submit:
                 if username and password:
-                    if verify_login(username, password):
+                    result = verify_login(username, password)
+                    if result:
                         st.session_state.logged_in = True
                         st.session_state.username = username
-                        st.success("✅ Login successful!")
+                        st.session_state.role = result[0]
+                        st.session_state.full_name = result[1]
+                        st.success(f"✅ Login successful! Welcome {result[1]}")
                         st.rerun()
                     else:
                         st.error("❌ Invalid username or password!")
                 else:
                     st.error("❌ Please fill all fields!")
         
-        st.info("💡 Default login: **username:** admin | **password:** admin123")
+        st.info("""
+        **💡 Default Accounts:**
+        
+        - **Administrator:** username: `admin` | password: `admin123`
+        - **Library Staff:** username: `staff` | password: `staff123`
+        - **Student:** username: `student` | password: `student123`
+        """)
     
     with tab2:
-        st.header("Register New Administrator")
+        st.header("Register New User")
         
         with st.form("register_form"):
             new_username = st.text_input("Username *")
@@ -248,6 +257,7 @@ if not st.session_state.logged_in:
             confirm_password = st.text_input("Confirm Password *", type="password")
             full_name = st.text_input("Full Name *")
             email = st.text_input("Email")
+            role = st.selectbox("Role *", ["Student", "Library Staff", "Administrator"])
             register = st.form_submit_button("Register")
             
             if register:
@@ -257,7 +267,7 @@ if not st.session_state.logged_in:
                     elif len(new_password) < 6:
                         st.error("❌ Password must be at least 6 characters!")
                     else:
-                        if register_admin(new_username, new_password, full_name, email):
+                        if register_user(new_username, new_password, full_name, email, role):
                             st.success("✅ Registration successful! Please login.")
                         else:
                             st.error("❌ Username already exists!")
@@ -266,26 +276,36 @@ if not st.session_state.logged_in:
 
 # Main Application (after login)
 else:
-    # Sidebar with logout
-    admin_name = get_admin_info(st.session_state.username)
+    user_role = st.session_state.role
     
+    # Sidebar with user info and logout
     st.sidebar.title("Navigation")
-    st.sidebar.info(f"👤 Logged in as: **{admin_name}**")
+    st.sidebar.info(f"👤 **{st.session_state.full_name}**\n\n🎭 Role: {user_role}")
     
     if st.sidebar.button("🚪 Logout"):
         st.session_state.logged_in = False
         st.session_state.username = None
+        st.session_state.role = None
+        st.session_state.full_name = None
         st.rerun()
     
     st.sidebar.markdown("---")
     
-    menu = st.sidebar.radio("Go to", ["Dashboard", "Add Book", "Search Books", "Borrow Book", "Return Book", "Borrowed Books", "View All Books"])
+    # Role-based menu options
+    if user_role == "Administrator":
+        menu_options = ["Dashboard", "Add Book", "Search Books", "Borrow Book", "Return Book", "Borrowed Books", "View All Books"]
+    elif user_role == "Library Staff":
+        menu_options = ["Search Books", "Borrow Book", "Return Book", "Borrowed Books"]
+    else:  # Student
+        menu_options = ["Search Books", "View All Books"]
+    
+    menu = st.sidebar.radio("Go to", menu_options)
     
     # Title
     st.title("📚 SAD Library Inventory Management System")
-    st.caption("💾 SQLite Database with Admin Authentication")
+    st.caption(f"💾 Multi-User System | Role: {user_role}")
     
-    # Dashboard
+    # Dashboard (Administrator only)
     if menu == "Dashboard":
         st.header("📊 Dashboard")
         
@@ -336,7 +356,7 @@ else:
             category_counts = books_df['category'].value_counts()
             st.bar_chart(category_counts)
     
-    # Add Book
+    # Add Book (Administrator only)
     elif menu == "Add Book":
         st.header("➕ Add New Book")
         
@@ -367,7 +387,7 @@ else:
                 else:
                     st.error("❌ Please fill all required fields (*)")
     
-    # Search Books
+    # Search Books (All users)
     elif menu == "Search Books":
         st.header("🔍 Search Books")
         
@@ -391,8 +411,12 @@ else:
                 st.dataframe(results, use_container_width=True)
             else:
                 st.warning("No books found matching your search.")
+        
+        # Student restriction message
+        if user_role == "Student":
+            st.info("ℹ️ **Student Access:** You can search and view book availability. Please contact library staff to borrow books.")
     
-    # Borrow Book
+    # Borrow Book (Administrator & Library Staff only)
     elif menu == "Borrow Book":
         st.header("📤 Borrow Book")
         
@@ -432,8 +456,12 @@ else:
                         st.rerun()
                     else:
                         st.error("❌ Please fill all required fields!")
+        
+        # Library staff restriction message
+        if user_role == "Library Staff":
+            st.warning("⚠️ **Staff Access:** You can record borrow/return actions but cannot modify the database directly.")
     
-    # Return Book
+    # Return Book (Administrator & Library Staff only)
     elif menu == "Return Book":
         st.header("📥 Return Book")
         
@@ -466,7 +494,7 @@ else:
                         st.success(f"✅ Book returned successfully!")
                         st.rerun()
     
-    # Borrowed Books
+    # Borrowed Books (Administrator & Library Staff only)
     elif menu == "Borrowed Books":
         st.header("📋 Currently Borrowed Books")
         
@@ -487,7 +515,7 @@ else:
                 st.warning(f"⚠️ {len(overdue)} overdue book(s)!")
                 st.dataframe(overdue, use_container_width=True)
     
-    # View All Books
+    # View All Books (All users)
     elif menu == "View All Books":
         st.header("📚 All Books in Library")
         
@@ -498,15 +526,18 @@ else:
         else:
             st.dataframe(books_df, use_container_width=True)
             
-            # Download as CSV
-            csv = books_df.to_csv(index=False)
-            st.download_button(
-                label="📥 Download as CSV",
-                data=csv,
-                file_name="library_inventory.csv",
-                mime="text/csv"
-            )
+            # Download as CSV (Administrator only)
+            if user_role == "Administrator":
+                csv = books_df.to_csv(index=False)
+                st.download_button(
+                    label="📥 Download as CSV",
+                    data=csv,
+                    file_name="library_inventory.csv",
+                    mime="text/csv"
+                )
+            else:
+                st.info("ℹ️ You can view all books and check their availability.")
     
     # Footer
     st.sidebar.markdown("---")
-    st.sidebar.info("📚 SAD Library System v3.0")
+    st.sidebar.info("📚 SAD Library System v4.0")
